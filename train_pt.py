@@ -581,3 +581,4 @@ if __name__ == '__main__':
     main(hparams)
 
 # --test --ckpt output/last.ckpt --save_vids --num_save 5
+# new
