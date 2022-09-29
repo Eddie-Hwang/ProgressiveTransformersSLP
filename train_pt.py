@@ -1,32 +1,75 @@
+import json
 import os
 from argparse import ArgumentParser
+from collections import OrderedDict
+from typing import Counter
 
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import yaml
 from einops import rearrange
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.callbacks import (EarlyStopping, LearningRateMonitor,
+                                         ModelCheckpoint)
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
+from torchtext.vocab import vocab
 
 from data import load_data
+from helpers import calculate_dtw
 from model import build_model
+from prediction import validate_on_data
 from render import save_sign_video
 from search import greedy
-from tokenizer import (SimpleTokenizer, build_vocab_from_phoenix,
+from tokenizer import (HugTokenizer, SimpleTokenizer, build_vocab_from_phoenix,
                        white_space_tokenizer)
-from utils import postprocess
-from prediction import validate_on_data
-from helpers import calculate_dtw
+from utils import load_json, postprocess
 
 
 def load_yaml(fpath):
     with open(fpath) as f:
         config = yaml.safe_load(f)
     return config
+
+
+def set_whitespace_tokenizer(train_path, mode, **kwargs):
+    _vocab = build_vocab_from_phoenix(train_path, white_space_tokenizer, mode = mode)
+    _tokenizer = SimpleTokenizer(white_space_tokenizer, _vocab)
+
+    return {'tokenizer': _tokenizer, 'vocab': _vocab}
+
+
+def set_hug_tokenizer(tokenizer_fpath, **kwargs):
+    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+            
+    txt_json = load_json(tokenizer_fpath)
+    txt_json = txt_json['model']['vocab']
+    
+    # torchtext cannot merge with Tokenizers of HuggingFace
+    specials = ['<pad>', '<bos>', '<eos>', '<unk>'] # IMPORTANT: order is strict
+    
+    vocab_list = []
+    for k in txt_json.keys():
+        if k not in specials:
+            vocab_list.append(k)
+    vocab_counter = Counter(vocab_list)
+    
+    # the vocab size is 1000 with phoenix
+    _vocab = vocab(OrderedDict(vocab_counter), specials = specials)
+    
+    _tokenizer = HugTokenizer(tokenizer_fpath)
+    
+    return {'tokenizer': _tokenizer, 'vocab': _vocab}
+
+
+def set_tokenizer_dict():
+    return {
+        'whitespace': set_whitespace_tokenizer,
+        'bpe': set_hug_tokenizer,
+        'wordpiece': set_hug_tokenizer
+    }
 
 
 class ProgressiveTransformer(nn.Module):
@@ -142,6 +185,8 @@ class ProgressiveTransformerModule(pl.LightningModule):
             save_vids,
             output_dir,
             max_seq_len = -1,
+            tokenizer_fpath = None,
+            tokenizer_type = 'whitespace',
             **kwargs
     ):
         super().__init__()
@@ -161,13 +206,23 @@ class ProgressiveTransformerModule(pl.LightningModule):
         self.lr = lr
         self.output_dir = output_dir
 
-        text_vocab = build_vocab_from_phoenix(train_path, white_space_tokenizer, mode='text')
-        text_tokenizer = SimpleTokenizer(white_space_tokenizer, text_vocab)
+        tokenizer_dict = set_tokenizer_dict()
+        
+        _tokenizer = tokenizer_dict[tokenizer_type](
+            train_path = train_path,
+            tokenizer_fpath = tokenizer_fpath, 
+            mode = 'text'
+        )
+        
+        # define tokenzier
+        text_tokenizer = _tokenizer['tokenizer']
+        text_vocab = _tokenizer['vocab']
 
         config = load_yaml(config_path)
-        self.config = config
+        
         model = ProgressiveTransformer(config, text_vocab)
 
+        self.config = config
         self.tokenizer = text_tokenizer
         self.model = model
         self.save_vids = save_vids
@@ -190,7 +245,7 @@ class ProgressiveTransformerModule(pl.LightningModule):
                 min_seq_len=self.min_seq_len
             )
 
-        print(f'[INFO] {self.dataset_type} dataset loaded with sequence length {self.min_seq_len}.')
+        print(f'[INFO] {self.dataset_type} dataset loaded with min sequence length {self.min_seq_len}.')
 
         if self.dataset_type == 'how2sign':
             self.S = 3
@@ -206,7 +261,7 @@ class ProgressiveTransformerModule(pl.LightningModule):
             add_special_tokens=True,
             device=self.device
         )
-
+        
         text_pad_mask = rearrange(text_pad_mask, 'b t -> b () t').bool()
 
         loss_mask = [torch.ones(j.size(0), device=self.device) for j in joint]
@@ -533,7 +588,8 @@ def main(hparams):
     if hparams.use_early_stopping:
         callbacks_list.append(early_stopping)
 
-    logger = module.get_logger('wandb', name=hparams.log_name)
+    # logger = module.get_logger('wandb', name=hparams.log_name)
+    logger = module.get_logger('tensorboard', name=hparams.log_name)
     hparams.logger = logger
 
     trainer = pl.Trainer.from_argparse_args(hparams, callbacks=callbacks_list)
@@ -573,6 +629,8 @@ if __name__ == '__main__':
     parser.add_argument('--output_dir', default='output_gnfp_lossmask42')
     parser.add_argument('--ckpt', default=None)
     parser.add_argument('--max_seq_len', type=int, default=512)     # 512 for how2sign, -1 for phoenix
+    parser.add_argument('--tokenizer_fpath', type = str, default = '/home/ejhwang/projects/slt/wordpiece/how2sign/how2sign-wordpiece-8192-vocab.json')
+    parser.add_argument('--tokenizer_type', type = str, default = 'wordpiece', help="[bpe, wordpiece, whitespace]")
 
     parser = ProgressiveTransformer.add_model_specific_args(parser)
 

@@ -59,10 +59,10 @@ class Model(nn.Module):
         # self.bos_index = self.src_vocab.stoi[BOS_TOKEN]
         # self.pad_index = self.src_vocab.stoi[PAD_TOKEN]
         # self.eos_index = self.src_vocab.stoi[EOS_TOKEN]
-
-        self.bos_index = self.src_vocab.lookup_indices(['bos'])[0]
-        self.pad_index = self.src_vocab.lookup_indices(['pad'])[0]
-        self.eos_index = self.src_vocab.lookup_indices(['eos'])[0]
+        
+        self.bos_index = self.src_vocab.lookup_indices(['<bos>'])[0]
+        self.pad_index = self.src_vocab.lookup_indices(['<pad>'])[0]
+        self.eos_index = self.src_vocab.lookup_indices(['<eos>'])[0]
 
         self.target_pad = TARGET_PAD
 
@@ -345,3 +345,6 @@ def build_model(cfg: dict = None,
     initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
 
     return model
+
+
+ 

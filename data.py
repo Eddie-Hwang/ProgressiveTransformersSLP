@@ -71,10 +71,18 @@ from utils import load_dirs, load_json
 #     return data_iter
 
 
+# def get_random_seq(seq, seq_len):
+#     start = random.randrange(0, len(seq) + 1 - seq_len)
+#     end = start + seq_len
+#     return seq[start : end]
+
 def get_random_seq(seq, seq_len):
-    start = random.randrange(0, len(seq) + 1 - seq_len)
-    end = start + seq_len
-    return seq[start : end]
+    if seq.shape[0] > seq_len:
+        start = random.randrange(0, len(seq) + 1 - seq_len)
+        end = start + seq_len
+        seq = seq[start : end]
+
+    return seq
 
 
 def load_data(
